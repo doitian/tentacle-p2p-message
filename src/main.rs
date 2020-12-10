@@ -4,5 +4,9 @@ fn main() {
         env_logger::builder().filter_level(Info).init();
     }
 
-    log::info!("Hello");
+    let mut rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+
+    rt.block_on(async {
+        log::info!("Hello, Tokio");
+    });
 }
