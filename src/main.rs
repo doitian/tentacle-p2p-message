@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use tentacle::{
     builder::ServiceBuilder,
     context::ServiceContext,
-    secio::SecioKeyPair,
+    secio::{peer_id::PeerId, SecioKeyPair},
     service::{ServiceEvent, TargetProtocol},
     traits::ServiceHandle,
+    SessionId,
 };
 
 struct AppServiceHandle;
@@ -16,6 +18,26 @@ impl ServiceHandle for AppServiceHandle {
 
         log::info!("handle_event: {:?}", event);
     }
+}
+
+struct Peers {
+    reachable_peers: Vec<PeerId>,
+    disconnected_peers: Vec<PeerId>,
+}
+
+struct Message {
+    recipient: PeerId,
+    message: String,
+}
+
+enum Payload {
+    Peers(Peers),
+    Message(Message),
+}
+
+struct State {
+    reachable_peers: HashMap<PeerId, Vec<SessionId>>,
+    pending_message: Option<Message>,
 }
 
 struct AppArgs {
