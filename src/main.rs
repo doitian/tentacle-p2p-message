@@ -10,6 +10,8 @@ use tentacle::{
     SessionId,
 };
 
+use serde::{Deserialize, Serialize};
+
 struct AppServiceHandle;
 
 impl ServiceHandle for AppServiceHandle {
@@ -22,16 +24,19 @@ impl ServiceHandle for AppServiceHandle {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 struct Peers {
-    reachable_peers: Vec<PeerId>,
-    disconnected_peers: Vec<PeerId>,
+    reachable_peers: Vec<String>,
+    disconnected_peers: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 struct Message {
-    recipient: PeerId,
+    recipient: String,
     message: String,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 enum Payload {
     Peers(Peers),
     Message(Message),
@@ -89,10 +94,7 @@ fn parse_args() -> AppArgs {
     let mut parsed_args = AppArgs::default();
     let args: Vec<_> = std::env::args().collect();
     if args.len() > 1 {
-        {
-            use std::str::FromStr;
-            parsed_args.port = u16::from_str(&args[1]).expect("port number");
-        }
+        parsed_args.port = u16::from_str(&args[1]).expect("port number");
     }
     if args.len() > 2 && !args[2].is_empty() {
         parsed_args.bootnode = Some(args[2].clone());
@@ -127,7 +129,7 @@ fn main() {
 
         let pending_message = args.message.as_ref().and_then(|message| {
             args.target_peer_id.as_ref().map(|recipient| Message {
-                recipient: PeerId::from_str(recipient).expect("target_peer_id is a PeerId"),
+                recipient: recipient.clone(),
                 message: message.clone(),
             })
         });

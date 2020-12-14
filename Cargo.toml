@@ -12,3 +12,6 @@ env_logger = "0.6"
 tokio = "0.2"
 tentacle = { version = "0.3", features = ["molc"] }
 futures = "0.3"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
