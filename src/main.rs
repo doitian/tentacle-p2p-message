@@ -1,5 +1,8 @@
 use tentacle::{
-    builder::ServiceBuilder, context::ServiceContext, secio::SecioKeyPair, service::ServiceEvent,
+    builder::ServiceBuilder,
+    context::ServiceContext,
+    secio::SecioKeyPair,
+    service::{ServiceEvent, TargetProtocol},
     traits::ServiceHandle,
 };
 
@@ -84,12 +87,26 @@ fn main() {
 
         let mut app_service = ServiceBuilder::default()
             .key_pair(key_pair)
+            // By default, tentacle auto closes the connection when it is idle for more than 10
+            // seconds. Set this timeout to 1 day for this sample application.
+            .timeout(std::time::Duration::new(86640, 0))
             .build(AppServiceHandle);
 
         app_service
             .listen(format!("/ip4/127.0.0.1/tcp/{}", args.port).parse().unwrap())
             .await
             .expect("listen");
+
+        if let Some(bootnode) = args.bootnode {
+            log::info!("dial {}", bootnode);
+            app_service
+                .dial(
+                    bootnode.parse().expect("bootnode multiaddr"),
+                    TargetProtocol::All,
+                )
+                .await
+                .expect("connect bootnode");
+        }
 
         {
             use futures::stream::StreamExt;
