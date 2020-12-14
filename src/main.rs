@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use tentacle::{
     builder::ServiceBuilder,
-    context::ServiceContext,
+    bytes::Bytes,
+    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::{peer_id::PeerId, SecioKeyPair},
     service::{ServiceEvent, TargetProtocol},
-    traits::ServiceHandle,
+    traits::{ServiceHandle, ServiceProtocol},
     SessionId,
 };
 
@@ -38,6 +39,16 @@ enum Payload {
 struct State {
     reachable_peers: HashMap<PeerId, Vec<SessionId>>,
     pending_message: Option<Message>,
+}
+
+impl ServiceProtocol for State {
+    fn init(&mut self, _context: &mut ProtocolContext) {}
+
+    fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {}
+
+    fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {}
+
+    fn received(&mut self, _context: ProtocolContextMutRef<'_>, _data: Bytes) {}
 }
 
 struct AppArgs {
