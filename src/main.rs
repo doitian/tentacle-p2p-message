@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
+
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     bytes::Bytes,
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::{peer_id::PeerId, SecioKeyPair},
-    service::{ServiceEvent, TargetProtocol},
+    service::{ProtocolHandle, ServiceEvent, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
     SessionId,
 };
@@ -44,9 +45,15 @@ struct State {
 impl ServiceProtocol for State {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {}
+    fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
+        let session = context.session;
+        log::info!("p2p-message connected to {}", session.address);
+    }
 
-    fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {}
+    fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        let session = context.session;
+        log::info!("p2p-message disconnected from {}", session.address);
+    }
 
     fn received(&mut self, _context: ProtocolContextMutRef<'_>, _data: Bytes) {}
 }
@@ -118,7 +125,25 @@ fn main() {
             key_pair.peer_id().to_base58()
         );
 
+        let pending_message = args.message.as_ref().and_then(|message| {
+            args.target_peer_id.as_ref().map(|recipient| Message {
+                recipient: PeerId::from_str(recipient).expect("target_peer_id is a PeerId"),
+                message: message.clone(),
+            })
+        });
+        let protocol_meta = MetaBuilder::new()
+            .id(0.into())
+            .service_handle(move || {
+                let state = Box::new(State {
+                    reachable_peers: HashMap::new(),
+                    pending_message: pending_message,
+                });
+                ProtocolHandle::Callback(state)
+            })
+            .build();
+
         let mut app_service = ServiceBuilder::default()
+            .insert_protocol(protocol_meta)
             .key_pair(key_pair)
             // By default, tentacle auto closes the connection when it is idle for more than 10
             // seconds. Set this timeout to 1 day for this sample application.
