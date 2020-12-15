@@ -52,9 +52,7 @@ impl State {
     fn disconnect(&mut self, id: SessionId) -> Vec<PeerId> {
         let mut removed = Vec::new();
         self.reachable_peers.retain(|k, v| {
-            if let Some(pos) = v.iter().position(|e| *e == id) {
-                v.remove(pos);
-            }
+            v.retain(|e| *e != id);
             if v.is_empty() {
                 // no longer reachable
                 removed.push(k.clone());
@@ -64,24 +62,73 @@ impl State {
             }
         });
 
-        log::debug!(
-            "disconnect connection: {}, peers: {}",
-            id,
-            removed
-                .iter()
-                .map(|e| e.to_base58().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        log::debug!("STATE: {:?}", self.reachable_peers);
 
         removed
     }
+
+    fn handle_peers(&mut self, context: ProtocolContextMutRef, peers: Peers) {
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+
+        let session = context.session;
+        let self_peer_id = context.key_pair().expect("secio").peer_id();
+
+        for peer_id in std::iter::once(session.remote_pubkey.as_ref().expect("secio").peer_id())
+            .chain(
+                peers
+                    .reachable_peers
+                    .into_iter()
+                    .filter_map(|peer_id| PeerId::from_str(&peer_id).ok()),
+            )
+        {
+            // ignore self
+            if peer_id != self_peer_id {
+                let connections = self.reachable_peers.entry(peer_id.clone()).or_default();
+                if connections.is_empty() {
+                    added.push(peer_id.to_base58().to_string());
+                }
+                if connections.iter().position(|x| *x == session.id).is_none() {
+                    connections.push(session.id);
+                }
+            }
+        }
+
+        for peer_id in peers
+            .disconnected_peers
+            .into_iter()
+            .filter_map(|peer_id| PeerId::from_str(&peer_id).ok())
+        {
+            if let Some(v) = self.reachable_peers.get_mut(&peer_id) {
+                v.retain(|e| *e != session.id);
+                if v.is_empty() {
+                    removed.push(peer_id.to_base58().to_string());
+                }
+            }
+        }
+        self.reachable_peers.retain(|_k, v| !v.is_empty());
+
+        log::debug!("STATE: {:?}", self.reachable_peers);
+
+        if !(added.is_empty() && removed.is_empty()) {
+            let payload = Payload::Peers(Peers {
+                reachable_peers: added,
+                disconnected_peers: removed,
+            });
+            let bytes = Bytes::from(serde_json::to_vec(&payload).expect("serialize to JSON"));
+            context
+                .filter_broadcast(TargetSession::All, context.proto_id, bytes)
+                .expect("broadcast message");
+        }
+    }
+
+    fn handle_message(&mut self, _context: ProtocolContextMutRef, _message: Message) {}
 }
 
 impl ServiceProtocol for State {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         let session = context.session;
         log::info!("p2p-message connected to {}", session.address);
 
@@ -108,7 +155,7 @@ impl ServiceProtocol for State {
         }
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
         let session = context.session;
         log::info!("p2p-message disconnected from {}", session.address);
 
@@ -131,15 +178,20 @@ impl ServiceProtocol for State {
         }
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef<'_>, data: Bytes) {
+    fn received(&mut self, context: ProtocolContextMutRef, data: Bytes) {
         let session = context.session;
-        let message_result: serde_json::Result<Payload> = serde_json::from_slice(&data);
-        if let Ok(message) = message_result {
+        let payload_result: serde_json::Result<Payload> = serde_json::from_slice(&data);
+        if let Ok(payload) = payload_result {
             log::info!(
                 "p2p-message received from {}: {:?}",
                 session.address,
-                message
+                payload
             );
+
+            match payload {
+                Payload::Peers(peers) => self.handle_peers(context, peers),
+                Payload::Message(message) => self.handle_message(context, message),
+            }
         }
     }
 }
@@ -195,7 +247,7 @@ fn main() {
         use log::LevelFilter::{Debug, Info};
         env_logger::builder()
             .filter_level(Info)
-            .filter_module("p2p-message", Debug)
+            .filter_module("p2p_message", Debug)
             .init();
     }
 
