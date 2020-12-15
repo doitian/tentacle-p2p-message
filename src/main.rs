@@ -5,7 +5,7 @@ use tentacle::{
     bytes::Bytes,
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::{peer_id::PeerId, SecioKeyPair},
-    service::{ProtocolHandle, ServiceEvent, TargetProtocol},
+    service::{ProtocolHandle, ServiceEvent, TargetProtocol, TargetSession},
     traits::{ServiceHandle, ServiceProtocol},
     SessionId,
 };
@@ -47,6 +47,37 @@ struct State {
     pending_message: Option<Message>,
 }
 
+impl State {
+    /// Disconnects from the session and return the no-longer reachable peers.
+    fn disconnect(&mut self, id: SessionId) -> Vec<PeerId> {
+        let mut removed = Vec::new();
+        self.reachable_peers.retain(|k, v| {
+            if let Some(pos) = v.iter().position(|e| *e == id) {
+                v.remove(pos);
+            }
+            if v.is_empty() {
+                // no longer reachable
+                removed.push(k.clone());
+                false
+            } else {
+                true
+            }
+        });
+
+        log::debug!(
+            "disconnect connection: {}, peers: {}",
+            id,
+            removed
+                .iter()
+                .map(|e| e.to_base58().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        removed
+    }
+}
+
 impl ServiceProtocol for State {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
@@ -80,6 +111,24 @@ impl ServiceProtocol for State {
     fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
         let session = context.session;
         log::info!("p2p-message disconnected from {}", session.address);
+
+        let peers = self.disconnect(session.id);
+        if !peers.is_empty() {
+            // Send `peers`.
+            let ids: Vec<_> = peers
+                .into_iter()
+                .map(|id| id.to_base58().to_string())
+                .collect();
+            let payload = Payload::Peers(Peers {
+                reachable_peers: Vec::new(),
+                disconnected_peers: ids,
+            });
+            let bytes = Bytes::from(serde_json::to_vec(&payload).expect("serialize to JSON"));
+
+            context
+                .filter_broadcast(TargetSession::All, context.proto_id, bytes)
+                .expect("broadcast message");
+        }
     }
 
     fn received(&mut self, context: ProtocolContextMutRef<'_>, data: Bytes) {
@@ -143,8 +192,11 @@ fn parse_args() -> AppArgs {
 
 fn main() {
     {
-        use log::LevelFilter::Info;
-        env_logger::builder().filter_level(Info).init();
+        use log::LevelFilter::{Debug, Info};
+        env_logger::builder()
+            .filter_level(Info)
+            .filter_module("p2p-message", Debug)
+            .init();
     }
 
     let args = parse_args();
