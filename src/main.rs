@@ -1,4 +1,7 @@
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
@@ -44,6 +47,7 @@ enum Payload {
 
 struct State {
     reachable_peers: HashMap<PeerId, Vec<SessionId>>,
+    connected_peers: HashSet<PeerId>,
     pending_message: Option<Message>,
 }
 
@@ -82,13 +86,16 @@ impl State {
                     .filter_map(|peer_id| PeerId::from_str(&peer_id).ok()),
             )
         {
-            // ignore self
+            // ignore self and direct connections
             if peer_id != self_peer_id {
                 let connections = self.reachable_peers.entry(peer_id.clone()).or_default();
                 if connections.is_empty() {
                     added.push(peer_id.to_base58().to_string());
                 }
-                if connections.iter().position(|x| *x == session.id).is_none() {
+                if connections.iter().position(|x| *x == session.id).is_none()
+                    // Filter the already directly connected peers
+                    && (connections.is_empty() || self.connected_peers.get(&peer_id).is_none())
+                {
                     connections.push(session.id);
                 }
             }
@@ -132,6 +139,9 @@ impl ServiceProtocol for State {
         let session = context.session;
         log::info!("p2p-message connected to {}", session.address);
 
+        let remote_peer_id = session.remote_pubkey.as_ref().expect("secio").peer_id();
+        self.connected_peers.insert(remote_peer_id);
+
         // Send `peers`.
         let ids: Vec<_> = self
             .reachable_peers
@@ -158,6 +168,9 @@ impl ServiceProtocol for State {
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
         let session = context.session;
         log::info!("p2p-message disconnected from {}", session.address);
+
+        let remote_peer_id = session.remote_pubkey.as_ref().expect("secio").peer_id();
+        self.connected_peers.remove(&remote_peer_id);
 
         let peers = self.disconnect(session.id);
         if !peers.is_empty() {
@@ -274,6 +287,7 @@ fn main() {
             .service_handle(move || {
                 let state = Box::new(State {
                     reachable_peers: HashMap::new(),
+                    connected_peers: HashSet::new(),
                     pending_message: pending_message,
                 });
                 ProtocolHandle::Callback(state)
