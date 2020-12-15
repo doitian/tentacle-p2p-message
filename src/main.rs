@@ -53,6 +53,28 @@ impl ServiceProtocol for State {
     fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         let session = context.session;
         log::info!("p2p-message connected to {}", session.address);
+
+        // Send `peers`.
+        let ids: Vec<_> = self
+            .reachable_peers
+            .keys()
+            .map(|id| id.to_base58().to_string())
+            .collect();
+        let payload = Payload::Peers(Peers {
+            reachable_peers: ids,
+            disconnected_peers: Vec::new(),
+        });
+        let bytes = Bytes::from(serde_json::to_vec(&payload).expect("serialize to JSON"));
+
+        context.send_message(bytes).expect("send message");
+
+        // Send `message`
+        if let Some(message) = self.pending_message.take() {
+            let payload = Payload::Message(message);
+            let bytes = Bytes::from(serde_json::to_vec(&payload).expect("serialize to JSON"));
+
+            context.send_message(bytes).expect("send message");
+        }
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
@@ -60,7 +82,17 @@ impl ServiceProtocol for State {
         log::info!("p2p-message disconnected from {}", session.address);
     }
 
-    fn received(&mut self, _context: ProtocolContextMutRef<'_>, _data: Bytes) {}
+    fn received(&mut self, context: ProtocolContextMutRef<'_>, data: Bytes) {
+        let session = context.session;
+        let message_result: serde_json::Result<Payload> = serde_json::from_slice(&data);
+        if let Ok(message) = message_result {
+            log::info!(
+                "p2p-message received from {}: {:?}",
+                session.address,
+                message
+            );
+        }
+    }
 }
 
 struct AppArgs {
