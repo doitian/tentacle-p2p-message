@@ -90,7 +90,7 @@ impl State {
             if peer_id != self_peer_id {
                 let connections = self.reachable_peers.entry(peer_id.clone()).or_default();
                 if connections.is_empty() {
-                    added.push(peer_id.to_base58().to_string());
+                    added.push(peer_id.to_base58());
                 }
                 if connections.iter().position(|x| *x == session.id).is_none()
                     // Filter the already directly connected peers
@@ -109,7 +109,7 @@ impl State {
             if let Some(v) = self.reachable_peers.get_mut(&peer_id) {
                 v.retain(|e| *e != session.id);
                 if v.is_empty() {
-                    removed.push(peer_id.to_base58().to_string());
+                    removed.push(peer_id.to_base58());
                 }
             }
         }
@@ -129,7 +129,28 @@ impl State {
         }
     }
 
-    fn handle_message(&mut self, _context: ProtocolContextMutRef, _message: Message) {}
+    fn handle_message(&mut self, context: ProtocolContextMutRef, message: Message) {
+        let self_peer_id = context.key_pair().expect("secio").peer_id().to_base58();
+
+        if self_peer_id == message.recipient {
+            log::info!("Receive message to self: {}", message.message);
+            return;
+        }
+
+        if let Ok(peer_id) = PeerId::from_str(&message.recipient) {
+            if let Some(sessions) = self.reachable_peers.get(&peer_id) {
+                let payload = Payload::Message(message);
+                let bytes = Bytes::from(serde_json::to_vec(&payload).expect("serialize to JSON"));
+                context
+                    .filter_broadcast(
+                        TargetSession::Multi(sessions.clone()),
+                        context.proto_id,
+                        bytes,
+                    )
+                    .expect("broadcast message");
+            }
+        }
+    }
 }
 
 impl ServiceProtocol for State {
@@ -146,7 +167,7 @@ impl ServiceProtocol for State {
         let ids: Vec<_> = self
             .reachable_peers
             .keys()
-            .map(|id| id.to_base58().to_string())
+            .map(|id| id.to_base58())
             .collect();
         let payload = Payload::Peers(Peers {
             reachable_peers: ids,
@@ -175,10 +196,7 @@ impl ServiceProtocol for State {
         let peers = self.disconnect(session.id);
         if !peers.is_empty() {
             // Send `peers`.
-            let ids: Vec<_> = peers
-                .into_iter()
-                .map(|id| id.to_base58().to_string())
-                .collect();
+            let ids: Vec<_> = peers.into_iter().map(|id| id.to_base58()).collect();
             let payload = Payload::Peers(Peers {
                 reachable_peers: Vec::new(),
                 disconnected_peers: ids,
